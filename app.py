@@ -17,7 +17,8 @@ from groq import Groq
 # ----------------------------------------------------------------------------
 # Config & sample data
 # ----------------------------------------------------------------------------
-MODEL = "llama-3.3-70b-versatile"
+# Tried in order; the first one your Groq key can access is used for the rest of the session
+MODELS = ["openai/gpt-oss-120b", "openai/gpt-oss-20b", "llama-3.3-70b-versatile", "llama-3.1-8b-instant"]
 SALON = "Glow Studio"
 PHONE = "+91-98100-00000"
 ADDRESS = "Khan Market, New Delhi"
@@ -183,12 +184,25 @@ def call_llm(user_msg: str) -> dict:
     prompt = (f"Conversation so far:\n{history}\n\nCurrent draft: {json.dumps(draft)}\n\n"
               f"Latest customer message: {user_msg}")
     client = Groq(api_key=st.secrets["GROQ_API_KEY"])
-    resp = client.chat.completions.create(
-        model=MODEL,
-        messages=[{"role": "system", "content": system_prompt()}, {"role": "user", "content": prompt}],
-        temperature=0.1, max_tokens=300, response_format={"type": "json_object"},
-    )
-    return json.loads(resp.choices[0].message.content)
+    messages = [{"role": "system", "content": system_prompt()}, {"role": "user", "content": prompt}]
+    candidates = [st.session_state.get("model")] if st.session_state.get("model") else MODELS
+    last_err = None
+    for model in candidates:
+        kwargs = dict(model=model, messages=messages, temperature=0.1, max_tokens=1200,
+                      response_format={"type": "json_object"})
+        if model.startswith("openai/gpt-oss"):
+            kwargs["extra_body"] = {"reasoning_effort": "low"}  # keeps replies fast
+        try:
+            resp = client.chat.completions.create(**kwargs)
+        except Exception as e:
+            # model missing / not allowed for this key -> try the next one; anything else is a real error
+            if type(e).__name__ in ("NotFoundError", "PermissionDeniedError", "BadRequestError"):
+                last_err = e
+                continue
+            raise
+        st.session_state["model"] = model
+        return json.loads(resp.choices[0].message.content)
+    raise last_err
 
 
 # ----------------------------------------------------------------------------
