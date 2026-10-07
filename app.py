@@ -393,9 +393,13 @@ def respond(user_msg: str) -> str:
             raise ValueError("bad JSON shape")
     except (json.JSONDecodeError, ValueError):
         return "Sorry, I got a bit muddled there. Could you say that again in a different way?"
-    except Exception:
-        return (f"I'm having trouble connecting right now. Please try again in a minute, "
-                f"or call our front desk at **{PHONE}** to book directly.")
+    except Exception as e:
+        print(f"Groq call failed: {type(e).__name__}: {e}")  # visible in Manage app > logs
+        msg = (f"I'm having trouble connecting right now. Please try again in a minute, "
+               f"or call our front desk at **{PHONE}** to book directly.")
+        if st.secrets.get("DEBUG"):  # set DEBUG = "1" in Secrets to see the cause on screen
+            msg += f"\n\n`debug: {type(e).__name__}: {str(e)[:200]}`"
+        return msg
     return handle(parsed)
 
 
