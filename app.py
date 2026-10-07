@@ -199,10 +199,15 @@ Request: {clause.get('question_for_landlord')}"""
 
 
 def score(result, rule_flags):
+    """Share of clauses that are risky, weighted (Unusual counts double).
+    Rule flags are NOT added again: they usually describe the same clauses."""
     clauses = result.get("clauses", [])
+    if not clauses:
+        return 0
     unusual = sum(c.get("risk") == "Unusual" for c in clauses)
     check = sum(c.get("risk") == "Check" for c in clauses)
-    return max(0, 100 - 15 * unusual - 5 * check - 4 * len(rule_flags))
+    risk_share = (2 * unusual + check) / (2 * len(clauses))
+    return round(100 * (1 - risk_share))
 
 
 def report_text(result, rule_flags, sc):
