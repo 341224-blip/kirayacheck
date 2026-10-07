@@ -9,7 +9,7 @@ from google.genai import types
 # ------------------------------------------------------------------ config
 st.set_page_config(page_title="KirayaCheck", page_icon="🏠", layout="wide")
 
-MODELS = ["gemini-2.5-flash", "gemini-flash-latest", "gemini-2.5-flash-lite"]
+MODELS = ["gemini-3.5-flash", "gemini-3-flash-preview", "gemini-3.1-flash-lite-preview", "gemini-flash-latest"]
 MIN_CHARS, MAX_CHARS = 200, 15000
 RENTAL_WORDS = ["rent", "tenant", "landlord", "licensor", "licensee", "lessor",
                 "lessee", "deposit", "premises", "lease", "license"]
@@ -36,36 +36,78 @@ RULES (never break these):
 6. Keep explanations short (max 2 sentences). Use simple words."""
 
 
-def get_client():
-    key = None
+def get_secret(name):
     try:
-        key = st.secrets["GEMINI_API_KEY"]
+        v = st.secrets[name]
     except Exception:
-        key = os.environ.get("GEMINI_API_KEY")
+        v = os.environ.get(name)
+    return v or None
+
+
+PROVIDER = "groq" if get_secret("GROQ_API_KEY") else "gemini"
+PROVIDER_LABEL = "Groq" if PROVIDER == "groq" else "Google Gemini"
+GROQ_MODELS = ["llama-3.3-70b-versatile", "openai/gpt-oss-120b",
+               "openai/gpt-oss-20b", "llama-3.1-8b-instant"]
+
+
+def _call_groq(prompt, json_mode):
+    from groq import Groq
+    client = Groq(api_key=get_secret("GROQ_API_KEY"))
+    wanted = ([get_secret("GROQ_MODEL")] if get_secret("GROQ_MODEL") else []) + GROQ_MODELS
+    try:  # discover which models are really available right now
+        available = {m.id for m in client.models.list().data}
+        candidates = [m for m in wanted if m in available]
+        if not candidates:
+            raise RuntimeError("None of the preferred models are available. Available: "
+                               + ", ".join(sorted(available)[:15]))
+    except RuntimeError:
+        raise
+    except Exception:
+        candidates = wanted  # listing failed; just try the names
+    errors = []
+    for model in candidates:
+        try:
+            kwargs = dict(model=model, temperature=0.2, max_tokens=6000,
+                          messages=[{"role": "system", "content": SYSTEM_PROMPT},
+                                    {"role": "user", "content": prompt}])
+            if json_mode:
+                kwargs["response_format"] = {"type": "json_object"}
+            resp = client.chat.completions.create(**kwargs)
+            txt = resp.choices[0].message.content
+            if txt:
+                return txt
+            errors.append(f"{model}: empty response")
+        except Exception as e:  # noqa
+            errors.append(f"{model}: {type(e).__name__} {str(e)[:150]}")
+    raise RuntimeError(" | ".join(errors))
+
+
+def _call_gemini(prompt, json_mode):
+    key = get_secret("GEMINI_API_KEY")
     if not key:
-        return None
-    return genai.Client(api_key=key)
-
-
-def call_gemini(prompt, json_mode=True):
-    client = get_client()
-    if client is None:
         raise RuntimeError("API key not configured.")
-    last_err = None
-    for model in MODELS:  # fallback if a model is deprecated / rate-limited
+    client = genai.Client(api_key=key)
+    errors = []
+    for model in MODELS:
         try:
             cfg = types.GenerateContentConfig(
                 system_instruction=SYSTEM_PROMPT,
-                temperature=0.2,
-                max_output_tokens=8192,
+                max_output_tokens=16384,
                 response_mime_type="application/json" if json_mode else "text/plain",
             )
             resp = client.models.generate_content(model=model, contents=prompt, config=cfg)
             if resp.text:
                 return resp.text
+            errors.append(f"{model}: empty response")
         except Exception as e:  # noqa
-            last_err = e
-    raise last_err or RuntimeError("Empty response from model.")
+            errors.append(f"{model}: {type(e).__name__} {str(e)[:150]}")
+    raise RuntimeError(" | ".join(errors))
+
+
+def call_llm(prompt, json_mode=True):
+    if PROVIDER == "groq":
+        return _call_groq(prompt, json_mode)
+    return _call_gemini(prompt, json_mode)
 
 
 def parse_json(raw):
@@ -137,7 +179,7 @@ Return ONLY JSON with this exact shape:
 <agreement>
 {text}
 </agreement>"""
-    return parse_json(call_gemini(prompt))
+    return parse_json(call_llm(prompt))
 
 
 @st.cache_data(show_spinner=False, ttl=3600)
@@ -153,7 +195,7 @@ asking to discuss or modify this clause. Do not threaten or cite laws. Max 80 wo
 Clause title: {clause.get('title')}
 Concern: {clause.get('reason')}
 Request: {clause.get('question_for_landlord')}"""
-    return call_gemini(prompt, json_mode=False).strip()
+    return call_llm(prompt, json_mode=False).strip()
 
 
 def score(result, rule_flags):
@@ -185,9 +227,10 @@ with st.sidebar:
     lang = st.radio("Explanation language", ["English", "Hinglish"])
     st.markdown("---")
     st.subheader("🔒 Privacy")
-    st.caption("The text you paste is sent to Google's Gemini API for analysis. "
+    st.caption(f"The text you paste is sent to the {PROVIDER_LABEL} API for analysis. "
                "Do **not** include Aadhaar, PAN, phone numbers or bank details. "
                "Nothing is stored by this app.")
+    st.caption(f"AI provider: {PROVIDER_LABEL}")
     st.markdown("---")
     if st.button("Load sample agreement"):
         try:
