@@ -223,11 +223,15 @@ if st.button("🔍 Analyse agreement", type="primary"):
                 st.session_state.pop("result", None)
             else:
                 st.session_state["result"] = {"res": res, "flags": flags}
-        except Exception:
+        except Exception as e:
             # failure mode: API down / bad JSON -> still show rule-based checks
             st.session_state["result"] = {"res": None, "flags": flags}
+            st.session_state["err"] = f"{type(e).__name__}: {str(e)[:600]}"
+            print("KirayaCheck AI error:", st.session_state["err"])
             st.error("⚠️ The AI service is unavailable or returned an unreadable answer. "
                      "Showing the basic rule checks only. Please try again in a minute.")
+            with st.expander("Technical details (for debugging)"):
+                st.code(st.session_state["err"])
 
 data = st.session_state.get("result")
 if data:
